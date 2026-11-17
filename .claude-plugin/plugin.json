@@ -1,0 +1,21 @@
+{
+	"name": "session-spec-verify",
+	"version": "1.0.0",
+	"description": "Extract modular conceptual specs and decisions from coding sessions, refactor packs with protected external standards, and verify deployments with timestamped evidence runs.",
+	"author": {
+		"name": "TheFocus.AI"
+	},
+	"keywords": [
+		"specs",
+		"verification",
+		"decisions",
+		"standards",
+		"refactor",
+		"cold-rebuild"
+	],
+	"skills": [
+		"./skills/spec-extract",
+		"./skills/verify-deploy",
+		"./skills/spec-refactor"
+	]
+}

@@ -1,0 +1,18 @@
+{
+	"name": "session-spec-verify",
+	"displayName": "Session Spec & Verify",
+	"version": "1.0.0",
+	"description": "Extract modular conceptual specs and decisions from coding sessions, refactor packs with protected external standards, and verify deployments with timestamped evidence runs.",
+	"author": {
+		"name": "TheFocus.AI",
+		"url": "https://thefocus.ai"
+	},
+	"homepage": "https://github.com/The-Focus-AI/session-spec-verify",
+	"repository": "https://github.com/The-Focus-AI/session-spec-verify",
+	"logo": "assets/logo.svg",
+	"suggestedPrompts": [
+		"Extract modular specs and decisions from this session into docs/",
+		"Verify this repository and live deployment against docs/specs/ and docs/standards/",
+		"Refactor docs/ into conceptual spec packs and check cold-rebuild completeness"
+	]
+}

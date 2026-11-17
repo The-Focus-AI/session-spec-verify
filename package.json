@@ -1,0 +1,24 @@
+{
+	"name": "@thefocus-ai/session-spec-verify",
+	"version": "1.0.0",
+	"private": true,
+	"type": "module",
+	"description": "Modular conceptual spec extraction, evidence-backed deployment verification, and protected external-standard refactoring skills for cold-rebuildable software.",
+	"author": "TheFocus.AI",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/The-Focus-AI/session-spec-verify.git"
+	},
+	"engines": {
+		"node": ">=24.0.0"
+	},
+	"scripts": {
+		"sync": "node --experimental-strip-types scripts/sync-check-specs.ts",
+		"sync:check": "node --experimental-strip-types scripts/sync-check-specs.ts --check",
+		"specs:check": "node --experimental-strip-types skills/spec-refactor/scripts/check-specs.ts",
+		"specs:bundle": "node --experimental-strip-types skills/spec-refactor/scripts/check-specs.ts --bundle",
+		"test": "node --experimental-strip-types --test test/*.test.ts",
+		"check": "pnpm run sync:check && pnpm run specs:check && pnpm run test"
+	}
+}
