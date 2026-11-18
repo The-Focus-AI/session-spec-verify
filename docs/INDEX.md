@@ -17,8 +17,16 @@ Portable, repository-agnostic rules synced across projects. Local `spec-extract`
 ### Foundation Layer
 - [`foundation/pack-validator-and-cli`](./specs/foundation/pack-validator-and-cli.md) — Zero-dependency `check-specs.ts` schema validation, `--init` bootstrapping, `--effective` resolution, `VERSION_SKEW` / `person`-override checks, and `--bundle` compilation.
 
+- [Local viewer hosting](./specs/foundation/local-viewer-host.md) — Serve docs over localhost and connect to Ollama.
+
 ### Workflows Layer
 - [`workflows/three-skill-lifecycle`](./specs/workflows/three-skill-lifecycle.md) — Ground-truth extraction, protected external standards, immutable timestamped `docs/runs/` ledgers, and multi-harness manifests.
+
+---
+
+### Interfaces Layer
+
+- [Specification explorer](./specs/interfaces/spec-explorer.md) — Browse modules, inspect recorded evidence, and compare behavior questions against the docs.
 
 ---
 

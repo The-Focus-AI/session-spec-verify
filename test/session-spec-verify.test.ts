@@ -128,7 +128,7 @@ describe("session-spec-verify skill bundle and check-specs CLI", () => {
 		};
 		assert.equal(summary.ok, true);
 		assert.equal(summary.standardsCount, 1);
-		assert.equal(summary.specsCount, 2);
+		assert.equal(summary.specsCount, 4);
 		assert.ok(summary.decisionsCount >= 3);
 
 		const effRes = runTsScript(CANONICAL_SCRIPT, ["--root", REPO_ROOT, "--effective", "--json"]);
