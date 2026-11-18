@@ -48,6 +48,12 @@ pnpm dlx skills add The-Focus-AI/session-spec-verify --skill spec-extract verify
 pnpm dlx skills add The-Focus-AI/session-spec-verify --skill spec-extract -y
 ```
 
+For a project-scoped Codex install, run from your project root:
+
+```sh
+npx skills add The-Focus-AI/session-spec-verify --agent codex --skill spec-extract verify-deploy spec-refactor --yes
+```
+
 ### 2. Claude Code Plugin
 
 ```bash
@@ -68,6 +74,12 @@ cp -R /path/to/session-spec-verify/skills/* .agents/skills/
 ```
 
 ---
+
+## Docs explorer
+
+Run `node serve.mjs` and open [http://127.0.0.1:8080](http://127.0.0.1:8080) to browse the repository's specs, decisions, and recorded verification evidence. To browse another project, pass its docs directory as the first argument.
+
+The behavior comparison uses Ollama when available. Start Ollama on the same machine or set `OLLAMA_URL` to its HTTP origin before starting the viewer. Use **Find models** in the behavior view. See the [hosting spec](docs/specs/foundation/local-viewer-host.md) for details.
 
 ## Precise CLI & Cold-Rebuild Recipes
 
