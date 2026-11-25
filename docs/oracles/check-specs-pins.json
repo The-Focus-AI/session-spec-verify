@@ -1,0 +1,27 @@
+{
+  "fixture": "check-specs-pins",
+  "tier": 0,
+  "description": "Distinguishing Golden Pins verifying Mutation Tier enforcement, human-only override/waiver gates, and VERSION_SKEW detection in check-specs.ts.",
+  "pins": [
+    {
+      "id": "pin-override-agent-blocked",
+      "input": "spec overrides standards/secret-hygiene#per-repo-env-file citing coding_agent decision",
+      "expectedIssue": "OVERRIDE_AUTHORITY_INVALID"
+    },
+    {
+      "id": "pin-waiver-agent-blocked",
+      "input": "verdict.verdict='waived' with waivedBy='coding_agent'",
+      "expectedIssue": "WAIVER_AUTHORITY_INVALID"
+    },
+    {
+      "id": "pin-standard-version-skew",
+      "input": "spec uses standards/secret-hygiene@1 while standard pack bumped to version 2",
+      "expectedIssue": "VERSION_SKEW"
+    },
+    {
+      "id": "pin-spec-tier-bounds",
+      "input": "spec pack frontmatter declares tier: 9",
+      "expectedIssue": "SPEC_TIER_INVALID"
+    }
+  ]
+}

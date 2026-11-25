@@ -1,32 +1,42 @@
 ---
 kind: spec
 id: pack-validator-and-cli
-title: Zero-Dependency Spec Pack Validator, Initializer & Markdown Bundler
+title: Unified Spec Pack Validator, Initializer & Tiered Bundle CLI
+domain: foundation
 layer: foundation
-version: 1
+tier: 1
+status: active
+version: 2
 uses:
   - standards/portable-agent-skills@1
 ---
 
 ## Intent
 
-Provide a zero-dependency Node.js 24 TypeScript CLI (`check-specs.ts`) that initializes clean `docs/` skeletons, enforces pack schemas and override authority, resolves inherited rulesets, and compiles modular packs into one portable Markdown bundle.
+Provide a zero-dependency Node.js 24 TypeScript CLI (`check-specs.ts`) supporting `init`, `validate`, `effective`, and `bundle` subcommands over Mutation Tiers (`0 / 1 / 2`), 5 rule kinds, `docs/oracles/` fixtures, simplified 4-status `decisions.jsonl` records, and immutable `docs/runs/`.
 
 ## Invariants
 
 - **[slug-uniqueness-and-version-skew]** (*NEVER*): Duplicate `[kebab-slug]` rule identifiers across packs **NEVER** pass validation (except where a spec declares a valid `overrides:` target for that slug), and mismatched `uses: standards/<id>@<ver>` version pins **NEVER** pass silently (`VERSION_SKEW`).
-- **[person-ratified-overrides]** (*NEVER*): Local `overrides:` declarations **NEVER** validate unless their cited decision in `docs/decisions.jsonl` exists with `author.role === "person"` and outcome in `["decided", "intended", "accepted_risk"]`, and `"verdict": "waived"` entries in `docs/runs/*/verdicts.jsonl` **NEVER** pass without `"waivedBy": "person"`.
+- **[person-ratified-overrides]** (*NEVER*): Local `overrides:` declarations **NEVER** validate unless their cited decision in `docs/decisions.jsonl` exists with `author.role === "person"` and resolved status in `["decided", "accepted_risk", "intended"]`, and `"verdict": "waived"` entries in `docs/runs/*/verdicts.jsonl` **NEVER** pass without `"waivedBy": "person"`.
+
+## Anti-Specs
+
+- **[unbounded-rule-tier]** (*NEVER*): Packs and standards **NEVER** accept out-of-range Mutation Tiers (standard packs must be `tier: 0`, spec packs `tier: 0 | 1 | 2`), blocking silent promotion of Tier 1/2 edits into Tier 0.
 
 ## Acceptance Criteria
 
-- **[idempotent-workspace-init]**: Running `check-specs.ts --root <dir> --init [--title "<Title>"]` creates `docs/standards/`, `docs/specs/`, `docs/runs/`, empty `docs/decisions.jsonl`, and starter `docs/INDEX.md` without overwriting existing files, and the initialized workspace passes `check-specs.ts` immediately.
-- **[deterministic-markdown-bundle]**: Running `check-specs.ts --bundle` validates all packs and streams a combined Markdown document containing `docs/INDEX.md`, every external standard, every local conceptual pack, and a summary table rendered from `docs/decisions.jsonl`.
+- **[idempotent-workspace-init]**: Running `check-specs.ts init --root <dir> [--title "<Title>"]` creates `docs/standards/`, `docs/oracles/`, `docs/specs/`, `docs/runs/`, empty `docs/decisions.jsonl`, and starter `docs/INDEX.md` (with `## Glossary`) without overwriting existing files, and validates immediately.
+- **[deterministic-markdown-bundle]**: Running `check-specs.ts bundle` validates all packs and streams a unified Markdown bundle containing `docs/INDEX.md`, Tier 0 standards, `docs/oracles/` fixtures, Tier 1/2 domain specs, and a `docs/decisions.jsonl` summary table.
+
+## World Assumptions
+
+- **[node24-strip-types-runtime]**: Execution environment runs Node.js 24+ with `--experimental-strip-types` and `erasableSyntaxOnly` (breakage symptom: syntax rejection if TypeScript parameter properties or non-erasable enums are introduced).
+
+## Oracles
+
+- **[validator-golden-pins]**: Replay `docs/oracles/check-specs-pins.json` scenarios in `test/session-spec-verify.test.ts` and assert exact failure codes (`OVERRIDE_AUTHORITY_INVALID`, `WAIVER_AUTHORITY_INVALID`, `VERSION_SKEW`, `SPEC_TIER_INVALID`).
 
 ## Implementation Notes
 
-- **Zero-dependency Node 24 TypeScript**: Uses strictly `node:fs` and `node:path` under `node --experimental-strip-types` with erasable TypeScript syntax (`erasableSyntaxOnly`), avoiding build steps or third-party YAML parsers.
-- **Supported CLI flags**: `--root <dir>`, `--init`, `--title <string>`, `--effective`, `--bundle`, `--json`, and `--help`.
-
-## Verification
-
-1. **Automated Validator Suite**: Run `pnpm run test` (`test/session-spec-verify.test.ts`) to exercise `--init` idempotency, `--effective --json`, `--bundle`, `VERSION_SKEW`, `OVERRIDE_AUTHORITY_INVALID`, and `WAIVER_AUTHORITY_INVALID` in isolated `mktemp -d` directories.
+- Supported subcommands & flags: `init | validate | effective | bundle`, `--root <dir>`, `--title <string>`, `--json`, `--help` (legacy `--init`, `--effective`, `--bundle` flags also accepted).

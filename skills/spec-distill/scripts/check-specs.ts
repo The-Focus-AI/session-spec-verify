@@ -2,8 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 
 type PackKind = "standard" | "spec";
-type RuleKind = "invariant" | "criterion";
+type RuleKind = "invariant" | "anti_spec" | "criterion" | "assumption" | "oracle";
 type VerdictValue = "pass" | "fail" | "inconclusive" | "waived";
+type MutationTier = 0 | 1 | 2;
 
 type OverrideDecl = {
 	readonly target: string;
@@ -27,14 +28,22 @@ type ParsedPack = {
 	readonly id: string;
 	readonly title: string;
 	readonly version: number;
+	readonly tier: MutationTier;
 	readonly source: string | null;
 	readonly status: string | null;
 	readonly layer: string | null;
+	readonly domain: string | null;
 	readonly uses: readonly string[];
 	readonly overrides: readonly OverrideDecl[];
 	readonly sections: ReadonlySet<string>;
 	readonly rules: readonly ParsedRule[];
 	readonly body: string;
+};
+
+type OracleFixture = {
+	readonly relPath: string;
+	readonly filePath: string;
+	readonly ext: string;
 };
 
 type DecisionAuthor = {
@@ -47,35 +56,33 @@ type DecisionComment = {
 	readonly body: string;
 };
 
+type DecisionPin = {
+	readonly input: string;
+	readonly expected: string;
+};
+
 type DecisionRecord = {
 	readonly id: string;
 	readonly date: string;
-	readonly type: string;
-	readonly outcome: string;
+	readonly status?: string;
+	readonly type?: string;
+	readonly outcome?: string;
 	readonly author: DecisionAuthor;
 	readonly packs: readonly string[];
 	readonly title: string;
 	readonly summary: string;
 	readonly resolution: string;
 	readonly comments: readonly DecisionComment[];
+	readonly rejected?: readonly string[];
+	readonly pins?: readonly DecisionPin[];
 	readonly anchor?: string;
 	readonly historical?: boolean;
-};
-
-type VerdictRecord = {
-	readonly pack: string;
-	readonly packVersion: number;
-	readonly id: string;
-	readonly kind: RuleKind;
-	readonly verdict: VerdictValue;
-	readonly evidence: string;
-	readonly proposal: string | null;
-	readonly waivedBy: string | null;
 };
 
 type EffectiveRule = {
 	readonly pack: string;
 	readonly packVersion: number;
+	readonly tier: MutationTier;
 	readonly id: string;
 	readonly kind: RuleKind;
 	readonly modality: string | null;
@@ -98,6 +105,22 @@ const USES_REF_RE = /^standards\/([a-z0-9]+(?:-[a-z0-9]+)*)@([1-9]\d*)$/;
 const OVERRIDE_TARGET_RE =
 	/^standards\/([a-z0-9]+(?:-[a-z0-9]+)*)#([a-z0-9]+(?:-[a-z0-9]+)*)$/;
 
+const SECTION_RULE_KINDS: Readonly<Record<string, RuleKind>> = {
+	Invariants: "invariant",
+	"Anti-Specs": "anti_spec",
+	"Acceptance Criteria": "criterion",
+	"World Assumptions": "assumption",
+	Oracles: "oracle",
+	Verification: "oracle",
+};
+
+const VALID_V2_DECISION_STATUSES = new Set([
+	"decided",
+	"accepted_risk",
+	"deferred",
+	"open",
+]);
+
 const VALID_TYPE_OUTCOMES: Readonly<Record<string, readonly string[]>> = {
 	choice: ["decided", "intended", "follow_up"],
 	possible_bug: ["intended", "fixed", "withdrawn"],
@@ -105,7 +128,16 @@ const VALID_TYPE_OUTCOMES: Readonly<Record<string, readonly string[]>> = {
 	question: ["decided", "open"],
 };
 
-const OVERRIDE_VALID_OUTCOMES = new Set(["decided", "intended", "accepted_risk"]);
+const OVERRIDE_VALID_STATUSES = new Set(["decided", "accepted_risk", "intended"]);
+const VALID_RULE_KINDS = new Set<string>([
+	"invariant",
+	"anti_spec",
+	"criterion",
+	"assumption",
+	"oracle",
+]);
+const VALID_DIAGNOSES = new Set(["w_drift", "s_bug", "spec_ambiguity"]);
+const VALID_SPEC_STATUSES = new Set(["active", "candidate"]);
 
 function unquoteYamlScalar(raw: string): string {
 	const trimmed = raw.trim();
@@ -290,11 +322,18 @@ function parseFrontmatter(
 	return { meta, body };
 }
 
+function parseTierValue(raw: unknown): MutationTier | null {
+	if (raw === "0") return 0;
+	if (raw === "1") return 1;
+	if (raw === "2") return 2;
+	return null;
+}
+
 function parseMarkdownPack(
 	filePath: string,
 	relPath: string,
 	expectedKind: PackKind,
-	expectedLayer: string | null,
+	expectedDir: string | null,
 	issues: ValidationIssue[],
 ): ParsedPack | null {
 	const raw = fs.readFileSync(filePath, "utf8");
@@ -343,13 +382,25 @@ function parseMarkdownPack(
 		});
 	}
 
+	let tier: MutationTier = expectedKind === "standard" ? 0 : 1;
 	let source: string | null = null;
 	let status: string | null = null;
 	let layer: string | null = null;
+	let domain: string | null = null;
 	const uses: string[] = [];
 	const overrides: OverrideDecl[] = [];
 
 	if (expectedKind === "standard") {
+		if (meta.tier !== undefined) {
+			if (meta.tier !== "0") {
+				issues.push({
+					code: "STANDARD_TIER_INVALID",
+					file: relPath,
+					message: `Standard pack 'tier' must be '0', found '${String(meta.tier)}'.`,
+				});
+			}
+			tier = 0;
+		}
 		source = typeof meta.source === "string" && meta.source ? meta.source : null;
 		status = typeof meta.status === "string" ? meta.status : null;
 		if (!source) {
@@ -367,19 +418,57 @@ function parseMarkdownPack(
 			});
 		}
 	} else {
+		if (meta.tier !== undefined) {
+			const parsedTier = parseTierValue(meta.tier);
+			if (parsedTier === null) {
+				issues.push({
+					code: "SPEC_TIER_INVALID",
+					file: relPath,
+					message: `Spec 'tier' must be 0, 1, or 2, found '${String(meta.tier)}'.`,
+				});
+			} else {
+				tier = parsedTier;
+			}
+		}
+
+		if (meta.status !== undefined) {
+			if (typeof meta.status !== "string" || !VALID_SPEC_STATUSES.has(meta.status)) {
+				issues.push({
+					code: "SPEC_STATUS_INVALID",
+					file: relPath,
+					message: `Spec 'status' must be 'active' or 'candidate', found '${String(meta.status)}'.`,
+				});
+			} else {
+				status = meta.status;
+			}
+		} else {
+			status = "active";
+		}
+
+		domain = typeof meta.domain === "string" ? meta.domain : null;
 		layer = typeof meta.layer === "string" ? meta.layer : null;
-		if (!layer || !KEBAB_RE.test(layer)) {
+		const group = domain ?? layer;
+		if (!group || !KEBAB_RE.test(group)) {
 			issues.push({
 				code: "SPEC_LAYER_INVALID",
 				file: relPath,
-				message: `Spec 'layer' must be kebab-case, found '${String(meta.layer ?? "")}'.`,
+				message: `Spec 'domain' (or 'layer') must be kebab-case, found '${String(group ?? "")}'.`,
 			});
-		} else if (expectedLayer && layer !== expectedLayer) {
-			issues.push({
-				code: "SPEC_LAYER_MISMATCH",
-				file: relPath,
-				message: `Spec parent directory '${expectedLayer}' does not match frontmatter layer '${layer}'.`,
-			});
+		} else {
+			if (domain && layer && domain !== layer) {
+				issues.push({
+					code: "SPEC_LAYER_MISMATCH",
+					file: relPath,
+					message: `Spec frontmatter 'domain' ('${domain}') does not match 'layer' ('${layer}').`,
+				});
+			}
+			if (expectedDir && group !== expectedDir) {
+				issues.push({
+					code: "SPEC_LAYER_MISMATCH",
+					file: relPath,
+					message: `Spec parent directory '${expectedDir}' does not match frontmatter domain/layer '${group}'.`,
+				});
+			}
 		}
 
 		if (meta.uses !== undefined) {
@@ -460,7 +549,8 @@ function parseMarkdownPack(
 			continue;
 		}
 
-		if (currentSection === "Invariants" || currentSection === "Acceptance Criteria") {
+		const sectionRuleKind = SECTION_RULE_KINDS[currentSection];
+		if (sectionRuleKind) {
 			const ruleMatch = lineText.match(RULE_LINE_RE);
 			if (ruleMatch) {
 				const slug = ruleMatch[1]!.trim();
@@ -475,7 +565,7 @@ function parseMarkdownPack(
 				}
 				rules.push({
 					id: slug,
-					kind: currentSection === "Invariants" ? "invariant" : "criterion",
+					kind: sectionRuleKind,
 					modality,
 					statement,
 					line: idx + 1,
@@ -496,21 +586,22 @@ function parseMarkdownPack(
 			code: "PACK_RULES_MISSING",
 			file: relPath,
 			message:
-				"Pack must define at least one '- **[slug]**: ...' rule under '## Invariants' or '## Acceptance Criteria'.",
+				"Pack must define at least one '- **[slug]**: ...' rule under '## Invariants', '## Anti-Specs', '## Acceptance Criteria', '## World Assumptions', or '## Oracles'.",
 		});
 	}
-	if (!sections.has("Verification")) {
+	if (!sections.has("Oracles") && !sections.has("Verification")) {
 		issues.push({
 			code: "PACK_SECTION_MISSING",
 			file: relPath,
-			message: "Pack must contain a '## Verification' section.",
+			message: "Pack must contain an '## Oracles' or '## Verification' section.",
 		});
 	}
 
+	const groupRef = domain ?? layer ?? expectedDir ?? "unknown";
 	const packRef =
 		expectedKind === "standard"
 			? `standards/${idRaw || path.basename(filePath, ".md")}`
-			: `${layer || expectedLayer || "unknown"}/${idRaw || path.basename(filePath, ".md")}`;
+			: `${groupRef}/${idRaw || path.basename(filePath, ".md")}`;
 
 	return {
 		packRef,
@@ -520,9 +611,11 @@ function parseMarkdownPack(
 		id: idRaw || path.basename(filePath, ".md"),
 		title: titleRaw,
 		version: Number.isInteger(versionNum) ? versionNum : 0,
+		tier,
 		source,
 		status,
-		layer,
+		layer: groupRef,
+		domain,
 		uses,
 		overrides,
 		sections,
@@ -531,11 +624,11 @@ function parseMarkdownPack(
 	};
 }
 
-function listMarkdownFiles(dirPath: string): string[] {
+function listFilesByExt(dirPath: string, exts: readonly string[]): string[] {
 	if (!fs.existsSync(dirPath)) return [];
 	return fs
 		.readdirSync(dirPath, { withFileTypes: true })
-		.filter((d) => d.isFile() && d.name.endsWith(".md"))
+		.filter((d) => d.isFile() && exts.some((ext) => d.name.endsWith(ext)))
 		.map((d) => d.name)
 		.sort();
 }
@@ -547,6 +640,10 @@ function listSubdirs(dirPath: string): string[] {
 		.filter((d) => d.isDirectory())
 		.map((d) => d.name)
 		.sort();
+}
+
+function resolveDecisionStatus(rec: DecisionRecord): string {
+	return rec.status ?? rec.outcome ?? "";
 }
 
 function validateDecisions(
@@ -589,7 +686,7 @@ function validateDecisions(
 			continue;
 		}
 		const rec = parsed as Record<string, unknown>;
-		const requiredStrings = ["id", "date", "type", "outcome", "title", "summary", "resolution"];
+		const requiredStrings = ["id", "date", "title", "summary", "resolution"];
 		let validShape = true;
 		for (const field of requiredStrings) {
 			if (typeof rec[field] !== "string" || !rec[field]) {
@@ -641,15 +738,65 @@ function validateDecisions(
 			continue;
 		}
 
-		const type = rec.type as string;
-		const outcome = rec.outcome as string;
-		const allowedOutcomes = VALID_TYPE_OUTCOMES[type];
-		if (!allowedOutcomes || !allowedOutcomes.includes(outcome)) {
+		// Validate v2 `status` OR legacy v1 `(type, outcome)`
+		if (typeof rec.status === "string" && rec.status) {
+			if (!VALID_V2_DECISION_STATUSES.has(rec.status)) {
+				issues.push({
+					code: "DECISION_STATUS_INVALID",
+					file: lineLabel,
+					message: `Invalid v2 status '${rec.status}' on decision '${id}'; expected decided, accepted_risk, deferred, or open.`,
+				});
+			}
+		} else if (typeof rec.type === "string" && typeof rec.outcome === "string") {
+			const allowedOutcomes = VALID_TYPE_OUTCOMES[rec.type];
+			if (!allowedOutcomes || !allowedOutcomes.includes(rec.outcome)) {
+				issues.push({
+					code: "DECISION_OUTCOME_INVALID",
+					file: lineLabel,
+					message: `Invalid (type, outcome) pair ('${rec.type}', '${rec.outcome}') on decision '${id}'.`,
+				});
+			}
+		} else {
 			issues.push({
-				code: "DECISION_OUTCOME_INVALID",
+				code: "DECISION_STATUS_MISSING",
 				file: lineLabel,
-				message: `Invalid (type, outcome) pair ('${type}', '${outcome}') on decision '${id}'.`,
+				message: `Decision '${id}' requires 'status' (v2) or ('type' and 'outcome') (v1).`,
 			});
+		}
+
+		if (rec.rejected !== undefined) {
+			if (
+				!Array.isArray(rec.rejected) ||
+				rec.rejected.some((r) => typeof r !== "string" || !r.trim())
+			) {
+				issues.push({
+					code: "DECISION_REJECTED_INVALID",
+					file: lineLabel,
+					message: `Decision '${id}' field 'rejected' must be an array of non-empty strings.`,
+				});
+			}
+		}
+
+		if (rec.pins !== undefined) {
+			const badPin =
+				!Array.isArray(rec.pins) ||
+				rec.pins.some((p) => {
+					if (!p || typeof p !== "object" || Array.isArray(p)) return true;
+					const pin = p as Record<string, unknown>;
+					return (
+						typeof pin.input !== "string" ||
+						!pin.input.trim() ||
+						typeof pin.expected !== "string" ||
+						!pin.expected.trim()
+					);
+				});
+			if (badPin) {
+				issues.push({
+					code: "DECISION_PINS_INVALID",
+					file: lineLabel,
+					message: `Decision '${id}' field 'pins' must be an array of { input, expected } with non-empty strings.`,
+				});
+			}
 		}
 
 		const isHistoricalDecision = rec.historical === true;
@@ -682,7 +829,6 @@ function validateRuns(runsDir: string, issues: ValidationIssue[]): string[] {
 	if (!fs.existsSync(runsDir)) return [];
 	const runNames = listSubdirs(runsDir);
 	const validVerdicts = new Set(["pass", "fail", "inconclusive", "waived"]);
-	const validKinds = new Set(["invariant", "criterion"]);
 
 	for (const name of runNames) {
 		const relDir = `docs/runs/${name}`;
@@ -747,7 +893,7 @@ function validateRuns(runsDir: string, issues: ValidationIssue[]): string[] {
 				typeof rec.id !== "string" ||
 				!rec.id ||
 				typeof rec.kind !== "string" ||
-				!validKinds.has(rec.kind) ||
+				!VALID_RULE_KINDS.has(rec.kind) ||
 				typeof rec.verdict !== "string" ||
 				!validVerdicts.has(rec.verdict) ||
 				typeof rec.evidence !== "string" ||
@@ -762,6 +908,17 @@ function validateRuns(runsDir: string, issues: ValidationIssue[]): string[] {
 						"Verdict requires { pack, packVersion, id, kind, verdict, evidence, proposal, waivedBy }.",
 				});
 				continue;
+			}
+			if (
+				rec.diagnosis !== undefined &&
+				rec.diagnosis !== null &&
+				(typeof rec.diagnosis !== "string" || !VALID_DIAGNOSES.has(rec.diagnosis))
+			) {
+				issues.push({
+					code: "VERDICT_DIAGNOSIS_INVALID",
+					file: lineLabel,
+					message: `Invalid verdict diagnosis '${String(rec.diagnosis)}' for '${rec.id}'; expected w_drift, s_bug, spec_ambiguity, or null.`,
+				});
 			}
 			if (rec.verdict === "waived" && rec.waivedBy !== "person") {
 				issues.push({
@@ -819,6 +976,7 @@ function evaluateWorkspace(rootDir: string): {
 	readonly ok: boolean;
 	readonly rootDir: string;
 	readonly standards: readonly ParsedPack[];
+	readonly oracles: readonly OracleFixture[];
 	readonly specs: readonly ParsedPack[];
 	readonly decisions: readonly DecisionRecord[];
 	readonly runs: readonly string[];
@@ -830,6 +988,7 @@ function evaluateWorkspace(rootDir: string): {
 	const indexPath = path.join(docsDir, "INDEX.md");
 	const decisionsPath = path.join(docsDir, "decisions.jsonl");
 	const standardsDir = path.join(docsDir, "standards");
+	const oraclesDir = path.join(docsDir, "oracles");
 	const specsDir = path.join(docsDir, "specs");
 	const runsDir = path.join(docsDir, "runs");
 
@@ -849,7 +1008,7 @@ function evaluateWorkspace(rootDir: string): {
 	}
 
 	const standards: ParsedPack[] = [];
-	for (const fileName of listMarkdownFiles(standardsDir)) {
+	for (const fileName of listFilesByExt(standardsDir, [".md"])) {
 		const pack = parseMarkdownPack(
 			path.join(standardsDir, fileName),
 			`docs/standards/${fileName}`,
@@ -860,15 +1019,37 @@ function evaluateWorkspace(rootDir: string): {
 		if (pack) standards.push(pack);
 	}
 
+	const oracles: OracleFixture[] = [];
+	for (const fileName of listFilesByExt(oraclesDir, [".json", ".md"])) {
+		const full = path.join(oraclesDir, fileName);
+		const ext = path.extname(fileName).toLowerCase();
+		if (ext === ".json") {
+			try {
+				JSON.parse(fs.readFileSync(full, "utf8"));
+			} catch (err) {
+				issues.push({
+					code: "ORACLE_JSON_INVALID",
+					file: `docs/oracles/${fileName}`,
+					message: `Invalid JSON in oracle fixture: ${err instanceof Error ? err.message : String(err)}`,
+				});
+			}
+		}
+		oracles.push({
+			relPath: `docs/oracles/${fileName}`,
+			filePath: full,
+			ext,
+		});
+	}
+
 	const specs: ParsedPack[] = [];
-	for (const layerDir of listSubdirs(specsDir)) {
-		const fullLayerDir = path.join(specsDir, layerDir);
-		for (const fileName of listMarkdownFiles(fullLayerDir)) {
+	for (const groupDir of listSubdirs(specsDir)) {
+		const fullGroupDir = path.join(specsDir, groupDir);
+		for (const fileName of listFilesByExt(fullGroupDir, [".md"])) {
 			const pack = parseMarkdownPack(
-				path.join(fullLayerDir, fileName),
-				`docs/specs/${layerDir}/${fileName}`,
+				path.join(fullGroupDir, fileName),
+				`docs/specs/${groupDir}/${fileName}`,
 				"spec",
-				layerDir,
+				groupDir,
 				issues,
 			);
 			if (pack) specs.push(pack);
@@ -884,7 +1065,6 @@ function evaluateWorkspace(rootDir: string): {
 
 	const decisionsById = validateDecisions(decisionsPath, allPackRefs, issues);
 
-	// Check uses, overrides, and override authority
 	const overriddenTargetBySpec = new Map<string, Map<string, string>>();
 	const overriddenRuleSlugAllowed = new Map<string, Set<string>>();
 
@@ -955,11 +1135,12 @@ function evaluateWorkspace(rootDir: string): {
 						message: `Override '${ov.target}' cites decision '${ov.decision}' authored by '${dec.author.role}'; only 'person'-authored decisions can authorize standard overrides.`,
 					});
 				}
-				if (!OVERRIDE_VALID_OUTCOMES.has(dec.outcome)) {
+				const effectiveStatus = resolveDecisionStatus(dec);
+				if (!OVERRIDE_VALID_STATUSES.has(effectiveStatus)) {
 					issues.push({
 						code: "OVERRIDE_OUTCOME_INVALID",
 						file: spec.relPath,
-						message: `Override '${ov.target}' cites decision '${ov.decision}' with outcome '${dec.outcome}'; expected decided, intended, or accepted_risk.`,
+						message: `Override '${ov.target}' cites decision '${ov.decision}' with status '${effectiveStatus}'; expected decided or accepted_risk.`,
 					});
 				}
 			}
@@ -972,7 +1153,6 @@ function evaluateWorkspace(rootDir: string): {
 		overriddenRuleSlugAllowed.set(spec.packRef, allowedRedefine);
 	}
 
-	// Enforce rule slug uniqueness across all packs (except declared override redefinitions)
 	const ruleOwners = new Map<string, ParsedPack[]>();
 	for (const pack of allPacks) {
 		for (const rule of pack.rules) {
@@ -1006,7 +1186,6 @@ function evaluateWorkspace(rootDir: string): {
 	validateIndexLinks(indexPath, allPacks, issues);
 	const runs = validateRuns(runsDir, issues);
 
-	// Compute effective rules: active standards (deduplicated, excluding globally overridden targets when a spec overrides them) + local spec rules
 	const overriddenStandardRules = new Map<string, string>();
 	for (const spec of specs) {
 		for (const ov of spec.overrides) {
@@ -1015,24 +1194,14 @@ function evaluateWorkspace(rootDir: string): {
 	}
 
 	const effectiveRules: EffectiveRule[] = [];
-	const usedStandards = new Set<string>();
-	for (const spec of specs) {
-		for (const useRef of spec.uses) {
-			const m = useRef.match(USES_REF_RE);
-			if (m) usedStandards.add(`standards/${m[1]!}`);
-		}
-	}
-
 	for (const std of standards) {
-		if (!usedStandards.has(std.packRef) && specs.length > 0) {
-			// Include unused standards too if present in docs/standards/, flagged with sourcePack
-		}
 		for (const rule of std.rules) {
 			const overrideOwner = overriddenStandardRules.get(`${std.packRef}#${rule.id}`) ?? null;
 			if (overrideOwner) continue;
 			effectiveRules.push({
 				pack: std.packRef,
 				packVersion: std.version,
+				tier: 0,
 				id: rule.id,
 				kind: rule.kind,
 				modality: rule.modality,
@@ -1046,9 +1215,16 @@ function evaluateWorkspace(rootDir: string): {
 
 	for (const spec of specs) {
 		for (const rule of spec.rules) {
+			const ruleTier: MutationTier =
+				rule.kind === "invariant" || rule.kind === "anti_spec"
+					? 0
+					: rule.kind === "assumption"
+						? 2
+						: spec.tier;
 			effectiveRules.push({
 				pack: spec.packRef,
 				packVersion: spec.version,
+				tier: ruleTier,
 				id: rule.id,
 				kind: rule.kind,
 				modality: rule.modality,
@@ -1064,6 +1240,7 @@ function evaluateWorkspace(rootDir: string): {
 		ok: issues.length === 0,
 		rootDir,
 		standards,
+		oracles,
 		specs,
 		decisions: Array.from(decisionsById.values()),
 		runs,
@@ -1077,24 +1254,42 @@ function buildBundle(result: ReturnType<typeof evaluateWorkspace>): string {
 	const indexPath = path.join(result.rootDir, "docs", "INDEX.md");
 	chunks.push(fs.readFileSync(indexPath, "utf8").trimEnd());
 
-	chunks.push("\n\n---\n\n# External Standards (`docs/standards/`)\n");
+	chunks.push("\n\n---\n\n# Tier 0 · External Standards (`docs/standards/`)\n");
 	for (const std of result.standards) {
-		chunks.push(`\n<!-- pack: ${std.packRef}@${std.version} (${std.relPath}) -->\n`);
+		chunks.push(`\n<!-- pack: ${std.packRef}@${std.version} tier=0 (${std.relPath}) -->\n`);
 		chunks.push(fs.readFileSync(std.filePath, "utf8").trimEnd());
 	}
 
-	chunks.push("\n\n---\n\n# Local Conceptual Specs (`docs/specs/`)\n");
+	if (result.oracles.length > 0) {
+		chunks.push("\n\n---\n\n# Tier 0 · Holdout Oracle Fixtures (`docs/oracles/`)\n");
+		for (const oracle of result.oracles) {
+			chunks.push(`\n<!-- oracle: ${oracle.relPath} -->\n`);
+			const content = fs.readFileSync(oracle.filePath, "utf8").trimEnd();
+			if (oracle.ext === ".json") {
+				chunks.push("```json\n" + content + "\n```");
+			} else {
+				chunks.push(content);
+			}
+		}
+	}
+
+	chunks.push("\n\n---\n\n# Tier 1 / Tier 2 · Domain Spec Packs (`docs/specs/`)\n");
 	for (const spec of result.specs) {
-		chunks.push(`\n<!-- pack: ${spec.packRef}@${spec.version} (${spec.relPath}) -->\n`);
+		chunks.push(
+			`\n<!-- pack: ${spec.packRef}@${spec.version} tier=${spec.tier} status=${spec.status ?? "active"} (${spec.relPath}) -->\n`,
+		);
 		chunks.push(fs.readFileSync(spec.filePath, "utf8").trimEnd());
 	}
 
-	chunks.push("\n\n---\n\n# Decisions Log (`docs/decisions.jsonl`)\n\n");
-	chunks.push("| ID | Date | Type | Outcome | Author | Packs | Title |\n");
+	chunks.push("\n\n---\n\n# Decisions & Rationale Log (`docs/decisions.jsonl`)\n\n");
+	chunks.push("| ID | Date | Status | Author | Packs | Title | Rejected Options |\n");
 	chunks.push("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |\n");
 	for (const d of result.decisions) {
+		const status = resolveDecisionStatus(d);
+		const rejectedCell =
+			d.rejected && d.rejected.length > 0 ? d.rejected.join("; ") : "—";
 		chunks.push(
-			`| **${d.id}** | ${d.date} | \`${d.type}\` | \`${d.outcome}\` | \`${d.author.role}\` | ${d.packs.map((p) => `\`${p}\``).join(", ")} | ${d.title} |\n`,
+			`| **${d.id}** | ${d.date} | \`${status}\` | \`${d.author.role}\` | ${d.packs.map((p) => `\`${p}\``).join(", ")} | ${d.title} | ${rejectedCell} |\n`,
 		);
 	}
 
@@ -1109,6 +1304,7 @@ function initWorkspace(rootDir: string, explicitTitle: string | null, asJson: bo
 	const requiredDirs = [
 		path.join(rootDir, "docs"),
 		path.join(rootDir, "docs", "standards"),
+		path.join(rootDir, "docs", "oracles"),
 		path.join(rootDir, "docs", "specs"),
 		path.join(rootDir, "docs", "runs"),
 	];
@@ -1135,27 +1331,35 @@ function initWorkspace(rootDir: string, explicitTitle: string | null, asJson: bo
 		existing.push("docs/INDEX.md");
 	} else {
 		const starterIndex = [
-			`# ${projectTitle} — Modular Specifications & Verification Index`,
+			`# ${projectTitle} — Tiered Specifications & Verification Index`,
 			"",
-			"Modular specification packs (`docs/specs/`), protected external standards (`docs/standards/`), append-only design decisions (`docs/decisions.jsonl`), and immutable verification runs (`docs/runs/`).",
-			"",
-			"---",
-			"",
-			"## External Standards (`docs/standards/`)",
-			"",
-			"Portable, repository-agnostic standards adopted by this project. Local refactoring never edits files here directly; intentional deviations require a `person`-authored decision in [`decisions.jsonl`](./decisions.jsonl) and an `overrides:` block in the owning local spec.",
+			"Tiered specification packs (`docs/specs/`), protected Tier 0 standards (`docs/standards/`), frozen Golden Pin fixtures (`docs/oracles/`), design decisions (`docs/decisions.jsonl`), and immutable verification runs (`docs/runs/`).",
 			"",
 			"---",
 			"",
-			"## Conceptual Spec Layers (`docs/specs/`)",
+			"## Glossary (`TERM` — Shared Vocabulary)",
 			"",
-			"Organize local packs under conceptual layer directories (for example `foundation/`, `orchestration/`, `interfaces/`), and add a relative Markdown link for every pack here.",
+			"| Term | Surface Meaning & Boundary Units | Owning Domain |",
+			"| :--- | :--- | :--- |",
+			"| *(add terms)* | *Shared public nouns and units across specs* | — |",
+			"",
+			"---",
+			"",
+			"## Tier 0 · Protected External Standards (`docs/standards/`) & Oracles (`docs/oracles/`)",
+			"",
+			"Slow-clock invariants, anti-specs, and Golden Pin fixtures. Never mutated without `person` ratification and explicit `overrides:` citing a `person`-authored decision.",
+			"",
+			"---",
+			"",
+			"## Tier 1 & Tier 2 · Domain Spec Packs (`docs/specs/`)",
+			"",
+			"Organize local packs under domain directories (`domain: <name>`), tag each pack `tier: 1` (policies/goals) or `tier: 2` (volatile world assumptions `W`), and keep a relative Markdown link here.",
 			"",
 			"---",
 			"",
 			"## Ledgers & Immutable Verification Runs",
 			"",
-			"- [`decisions.jsonl`](./decisions.jsonl) — Append-only distilled decisions (`D-1`..`D-N`) and standard override authority.",
+			"- [`decisions.jsonl`](./decisions.jsonl) — Append-only rationale log (`decided`, `accepted_risk`, `deferred`, `open`) + `rejected[]` options and `pins[]`.",
 			"- [`runs/`](./runs/) — Immutable timestamped verification outputs (`<YYYY-MM-DDTHH-MM-SSZ>_<short-sha[-dirty]>/`).",
 			"",
 		].join("\n");
@@ -1207,26 +1411,28 @@ function parseCliArgs(argv: readonly string[]): {
 			if (!val) throw new Error("--root requires a directory argument");
 			rootDir = path.resolve(val);
 			i++;
-		} else if (arg === "--init") {
+		} else if (arg === "--init" || arg === "init") {
 			init = true;
+		} else if (arg === "validate") {
+			// Default action
 		} else if (arg === "--title") {
 			const val = argv[i + 1];
 			if (!val) throw new Error("--title requires a string argument");
 			title = val;
 			i++;
-		} else if (arg === "--effective") {
+		} else if (arg === "--effective" || arg === "effective") {
 			effective = true;
-		} else if (arg === "--bundle") {
+		} else if (arg === "--bundle" || arg === "bundle") {
 			bundle = true;
 		} else if (arg === "--json") {
 			json = true;
 		} else if (arg === "--help" || arg === "-h") {
 			console.log(
-				"Usage: check-specs.ts [--root <dir>] [--init [--title <title>]] [--effective] [--bundle] [--json]",
+				"Usage: check-specs.ts [init | validate | effective | bundle] [--root <dir>] [--title <title>] [--json]",
 			);
 			process.exit(0);
 		} else {
-			throw new Error(`Unknown option: ${arg}`);
+			throw new Error(`Unknown option or subcommand: ${arg}`);
 		}
 	}
 
@@ -1249,6 +1455,7 @@ function main(): void {
 						ok: false,
 						issues: res.issues,
 						standardsCount: res.standards.length,
+						oraclesCount: res.oracles.length,
 						specsCount: res.specs.length,
 					},
 					null,
@@ -1277,13 +1484,18 @@ function main(): void {
 						ok: true,
 						standards: res.standards.map((s) => ({
 							pack: s.packRef,
+							tier: s.tier,
 							version: s.version,
 							status: s.status,
 							source: s.source,
 						})),
+						oracles: res.oracles.map((o) => o.relPath),
 						specs: res.specs.map((s) => ({
 							pack: s.packRef,
+							domain: s.domain ?? s.layer,
 							layer: s.layer,
+							tier: s.tier,
+							status: s.status,
 							version: s.version,
 							uses: s.uses,
 							overrides: s.overrides,
@@ -1302,7 +1514,9 @@ function main(): void {
 			);
 			for (const rule of res.effectiveRules) {
 				const mod = rule.modality ? ` (${rule.modality})` : "";
-				console.log(`- [${rule.pack}@${rule.packVersion}] ${rule.id}${mod} [${rule.kind}]: ${rule.statement}`);
+				console.log(
+					`- [Tier ${rule.tier} · ${rule.pack}@${rule.packVersion}] ${rule.id}${mod} [${rule.kind}]: ${rule.statement}`,
+				);
 			}
 		}
 		return;
@@ -1314,6 +1528,7 @@ function main(): void {
 				{
 					ok: true,
 					standardsCount: res.standards.length,
+					oraclesCount: res.oracles.length,
 					specsCount: res.specs.length,
 					effectiveRuleCount: res.effectiveRules.length,
 					decisionsCount: res.decisions.length,
@@ -1325,7 +1540,7 @@ function main(): void {
 		);
 	} else {
 		console.log(
-			`specs:check PASS (${res.standards.length} standards, ${res.specs.length} specs, ${res.effectiveRules.length} effective rules, ${res.decisions.length} decisions, ${res.runs.length} runs)`,
+			`specs:check PASS (${res.standards.length} standards, ${res.oracles.length} oracles, ${res.specs.length} specs, ${res.effectiveRules.length} effective rules, ${res.decisions.length} decisions, ${res.runs.length} runs)`,
 		);
 	}
 }

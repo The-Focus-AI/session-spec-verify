@@ -1,7 +1,7 @@
 {
 	"name": "session-spec-verify",
-	"version": "1.0.0",
-	"description": "Extract modular conceptual specs and decisions from coding sessions, refactor packs with protected external standards, and verify deployments with timestamped evidence runs.",
+	"version": "2.0.0",
+	"description": "Tiered specification distillation (spec-distill), evidence-backed oracle and cold-rebuild verification (spec-verify), and local read-only specification explorer with Ollama KV-cached chat (spec-view).",
 	"author": {
 		"name": "TheFocus.AI"
 	},
@@ -10,12 +10,13 @@
 		"verification",
 		"decisions",
 		"standards",
-		"refactor",
+		"oracles",
+		"viewer",
 		"cold-rebuild"
 	],
 	"skills": [
-		"./skills/spec-extract",
-		"./skills/verify-deploy",
-		"./skills/spec-refactor"
+		"./skills/spec-distill",
+		"./skills/spec-verify",
+		"./skills/spec-view"
 	]
 }

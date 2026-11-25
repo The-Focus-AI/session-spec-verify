@@ -16,11 +16,16 @@ async function collect(dir, files) {
   for (const entry of entries) {
     const path = join(dir, entry.name);
     if (entry.isDirectory() && !entry.name.startsWith('.')) await collect(path, files);
-    if (entry.isFile() && /\.(md|jsonl)$/i.test(entry.name)) {
-      files.push({
-        path: 'docs/' + relative(docs, path).split(sep).join('/'),
-        text: await readFile(path, 'utf8'),
-      });
+    if (entry.isFile()) {
+      const rel = relative(docs, path).split(sep).join('/');
+      const isSupported = /\.(md|jsonl)$/i.test(entry.name) ||
+        (rel.startsWith('oracles/') && /\.json$/i.test(entry.name));
+      if (isSupported) {
+        files.push({
+          path: 'docs/' + rel,
+          text: await readFile(path, 'utf8'),
+        });
+      }
     }
   }
 }
@@ -62,7 +67,7 @@ createServer(async (req, res) => {
       let length = 0;
       for await (const part of req) {
         length += part.length;
-        if (length > 256_000) { send(res, 413, '{}'); return; }
+        if (length > 2_000_000) { send(res, 413, '{}'); return; }
         parts.push(part);
       }
       body = Buffer.concat(parts);

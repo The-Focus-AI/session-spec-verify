@@ -1,28 +1,31 @@
 ---
 kind: spec
 id: three-skill-lifecycle
-title: Three-Skill Spec Extraction, Refactoring & Verification Lifecycle
+title: Unified v2 Skill Lifecycle (Distill, Verify & View)
+domain: workflows
 layer: workflows
-version: 1
+tier: 1
+status: active
+version: 3
 uses:
   - standards/portable-agent-skills@1
 ---
 
 ## Intent
 
-Coordinate session extraction (`spec-extract`), structural pack refactoring (`spec-refactor`), and evidence-backed deployment verification (`verify-deploy`) across conceptual layers without leaking repository-specific assumptions.
+Unify specification work across two core lifecycle skills (`spec-distill` and `spec-verify`) and one read-only browser lens (`spec-view`), replacing overlapping extraction and refactoring workflows while aligning storage and verification around Mutation Tiers (`Tier 0 / 1 / 2`).
 
 ## Invariants
 
-- **[ground-truth-extraction]** (*NEVER*): `spec-extract` **NEVER** invents runtime claims from prose; code/diffs remain ground truth for *what* happens while transcripts remain ground truth for *why*, recording session decisions in `docs/decisions.jsonl` without duplicating a second prose decisions file.
-- **[protected-external-standards]** (*NEVER*): Routine `spec-extract` runs and local layer splits/merges in `spec-refactor` **NEVER** edit `docs/standards/*.md`; upstream changes enter via explicit standards updates (`VERSION_SKEW` reconciliation) and local deviations require ratified `overrides:`.
-- **[immutable-timestamped-runs]** (*NEVER*): `verify-deploy` **NEVER** overwrites prior verification runs; every pass creates a fresh `docs/runs/<YYYY-MM-DDTHH-MM-SSZ>_<short-sha[-dirty]>/` directory containing `summary.md` and `verdicts.jsonl`.
+- **[ground-truth-extraction]** (*NEVER*): `spec-distill` **NEVER** invents runtime claims from prose; it pairs session traces with `git diff` (Brownfield mode) or runs directly from PR commentary and escalations (Trace-First mode), recording rationale in `docs/decisions.jsonl`.
+- **[protected-external-standards]** (*NEVER*): Routine `spec-distill` runs **NEVER** edit `docs/standards/*.md` or `docs/oracles/*`; upstream updates surface `VERSION_SKEW` and local deviations require `person`-ratified `overrides:`.
+- **[immutable-timestamped-runs]** (*NEVER*): `spec-verify` **NEVER** overwrites prior verification runs; every pass creates `<YYYY-MM-DDTHH-MM-SSZ>_<short-sha[-dirty]>/` with `summary.md` and `verdicts.jsonl`.
 
 ## Acceptance Criteria
 
-- **[multi-harness-manifests]**: The repository exposes valid plugin and skill manifests for `skills` CLI (`skills/*`), Claude Code (`.claude-plugin/plugin.json`), and Antigravity (`plugin.json` + `assets/logo.svg`), keeping all skill instructions generic and free of single-repository hardcoding.
+- **[multi-harness-manifests]**: The repository exposes valid plugin and skill manifests for `skills` CLI (`spec-distill`, `spec-verify`, `spec-view`), Claude Code (`.claude-plugin/plugin.json`), and Antigravity (`plugin.json` + `assets/logo.svg`), synced via `pnpm run sync`.
+- **[fault-localized-verdicts]**: `spec-verify` checks `assumption` (`Tier 2 · W`) probes before blaming Tier 0/1 rules, recording `diagnosis: "w_drift"` on external drift vs. `"s_bug"` on core defects.
 
-## Verification
+## Oracles
 
-1. **Cross-Harness Manifest & Content Audit**: Verify `plugin.json`, `.claude-plugin/plugin.json`, `assets/logo.svg`, and all three `skills/*/SKILL.md` manifests in `test/session-spec-verify.test.ts` with zero hardcoded single-repo references.
-2. **Self-Hosted Spec & Run Validation**: Run `pnpm run check` to verify `session-spec-verify`'s own `docs/` packs, `decisions.jsonl`, and `docs/runs/` directories validate cleanly.
+- **[lifecycle-bundle-parity]**: Run `pnpm run check` and an isolated `mktemp -d` copy of `skills/` + `docs/` executing `check-specs.ts validate` and `check-specs.ts bundle`.

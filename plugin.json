@@ -1,8 +1,8 @@
 {
 	"name": "session-spec-verify",
 	"displayName": "Session Spec & Verify",
-	"version": "1.0.0",
-	"description": "Extract modular conceptual specs and decisions from coding sessions, refactor packs with protected external standards, and verify deployments with timestamped evidence runs.",
+	"version": "2.0.0",
+	"description": "Distill tiered specifications and decisions (spec-distill), verify oracles, W-drift, and cold-rebuild bundles (spec-verify), and browse specs locally with KV-cached Ollama chat (spec-view).",
 	"author": {
 		"name": "TheFocus.AI",
 		"url": "https://thefocus.ai"
@@ -11,8 +11,8 @@
 	"repository": "https://github.com/The-Focus-AI/session-spec-verify",
 	"logo": "assets/logo.svg",
 	"suggestedPrompts": [
-		"Extract modular specs and decisions from this session into docs/",
-		"Verify this repository and live deployment against docs/specs/ and docs/standards/",
-		"Refactor docs/ into conceptual spec packs and check cold-rebuild completeness"
+		"Distill tiered specs, decisions, and distinguishing pins from this session into docs/",
+		"Verify this workspace against Tier 0 invariants, anti-specs, W assumptions, and cold-rebuild readiness",
+		"Open the local spec viewer to browse docs/ and chat with Ollama"
 	]
 }
